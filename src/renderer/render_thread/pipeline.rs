@@ -1,15 +1,33 @@
-use wgpu::{include_wgsl, util::DeviceExt};
+use wgpu::{include_wgsl, util::DeviceExt, CommandBuffer, VertexAttribute};
 
-use super::{device::Gpu, instances::InstanceBuffer, uniform::UniformBuffer, BlitCommand};
+use crate::renderer::texture_ref::TextureRef;
+
+use super::{
+    buffers::instances::InstanceBuffer, buffers::uniform::UniformBuffer, gpu::Gpu,
+    textures::Textures,
+};
 
 pub(crate) struct Pipeline {
     pipeline: wgpu::RenderPipeline,
-    instance_buffer: InstanceBuffer,
     blit_buffer: wgpu::Buffer,
 }
 
+pub(crate) struct PipelineBuffers<'a> {
+    pub(crate) uniform: &'a UniformBuffer,
+    pub(crate) textures: &'a Textures,
+    pub(crate) instances: &'a InstanceBuffer,
+}
+
+pub(crate) struct RenderPass<'a> {
+    pub(crate) buffers: PipelineBuffers<'a>,
+    pub(crate) view: &'a wgpu::TextureView,
+    pub(crate) clear_color: Option<wgpu::Color>,
+    pub(crate) texture: TextureRef,
+    pub(crate) instances: std::ops::Range<u32>,
+}
+
 impl Pipeline {
-    pub fn new(gpu: &Gpu, uniform: &UniformBuffer) -> Pipeline {
+    pub fn new(gpu: &Gpu, buffers: PipelineBuffers<'_>) -> Pipeline {
         let device = gpu.device();
 
         let shader_desc = include_wgsl!("shader.wgsl");
@@ -17,7 +35,10 @@ impl Pipeline {
 
         let pipeline_layout_desc = wgpu::PipelineLayoutDescriptor {
             label: None,
-            bind_group_layouts: &[uniform.bind_group_layout()],
+            bind_group_layouts: &[
+                buffers.uniform.bind_group_layout(),
+                buffers.textures.bind_group_layout(),
+            ],
             push_constant_ranges: &[],
         };
         let pipeline_layout = device.create_pipeline_layout(&pipeline_layout_desc);
@@ -53,26 +74,14 @@ impl Pipeline {
         };
         let blit_buffer = device.create_buffer_init(&blit_buffer_desc);
 
-        let instance_buffer = InstanceBuffer::new(gpu);
-
         Pipeline {
             pipeline,
             blit_buffer,
-            instance_buffer,
         }
     }
 
-    pub fn render<'a>(
-        &mut self,
-        gpu: &Gpu,
-        view: &wgpu::TextureView,
-        clear_color: Option<wgpu::Color>,
-        blits: impl Iterator<Item = &'a BlitCommand>,
-        uniform: &UniformBuffer,
-    ) -> wgpu::CommandBuffer {
+    pub fn encode_pass(&mut self, gpu: &Gpu, pass: RenderPass<'_>) -> CommandBuffer {
         let device = gpu.device();
-
-        self.instance_buffer.write_blits(gpu, blits);
 
         let mut encoder =
             device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
@@ -80,10 +89,10 @@ impl Pipeline {
             let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: None,
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view,
+                    view: pass.view,
                     resolve_target: None,
                     ops: wgpu::Operations {
-                        load: if let Some(c) = clear_color {
+                        load: if let Some(c) = pass.clear_color {
                             wgpu::LoadOp::Clear(c)
                         } else {
                             wgpu::LoadOp::Load
@@ -95,9 +104,14 @@ impl Pipeline {
             });
             rpass.set_pipeline(&self.pipeline);
             rpass.set_vertex_buffer(0, self.blit_buffer.slice(..));
-            rpass.set_vertex_buffer(1, self.instance_buffer.buffer().slice(..));
-            rpass.set_bind_group(0, uniform.bind_group(), &[]);
-            rpass.draw(0..4, 0..self.instance_buffer.len() as _);
+            rpass.set_vertex_buffer(1, pass.buffers.instances.buffer().slice(..));
+            rpass.set_bind_group(0, pass.buffers.uniform.bind_group(), &[]);
+            rpass.set_bind_group(
+                1,
+                pass.buffers.textures.bind_group_for_texture(&pass.texture),
+                &[],
+            );
+            rpass.draw(0..4, pass.instances as _);
         }
         encoder.finish()
     }
@@ -107,29 +121,37 @@ impl Pipeline {
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 struct Vertex {
     position: [f32; 3],
+    uv_position: [f32; 2],
 }
 
 const BLIT_VERTICES: &[Vertex] = &[
     Vertex {
         position: [0.0, 0.0, 0.0],
+        uv_position: [0.0, 1.0],
     },
     Vertex {
         position: [0.0, 1.0, 0.0],
+        uv_position: [0.0, 0.0],
     },
     Vertex {
         position: [1.0, 0.0, 0.0],
+        uv_position: [1.0, 1.0],
     },
     Vertex {
         position: [1.0, 1.0, 0.0],
+        uv_position: [1.0, 0.0],
     },
 ];
 
 impl Vertex {
+    const ATTR_ARRAY: [VertexAttribute; 2] =
+        wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x2];
+
     fn layout() -> wgpu::VertexBufferLayout<'static> {
         wgpu::VertexBufferLayout {
             array_stride: std::mem::size_of::<Vertex>() as wgpu::BufferAddress,
             step_mode: wgpu::VertexStepMode::Vertex,
-            attributes: &wgpu::vertex_attr_array![0 => Float32x3],
+            attributes: &Self::ATTR_ARRAY,
         }
     }
 }

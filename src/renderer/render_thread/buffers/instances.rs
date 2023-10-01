@@ -1,14 +1,14 @@
 use cgmath::Matrix4;
 use wgpu::{BufferUsages, VertexAttribute};
 
-use super::{device::Gpu, BlitCommand};
+use crate::renderer::{render_thread::gpu::Gpu, BlitCommand};
+
 use std::mem;
 
 const INSTANCE_BUFFER_CAPACITY: u64 = 1 << 12;
 
 pub(crate) struct InstanceBuffer {
     buffer: wgpu::Buffer,
-    len: u64,
 }
 
 impl InstanceBuffer {
@@ -20,26 +20,17 @@ impl InstanceBuffer {
             mapped_at_creation: false,
         };
         let buffer = gpu.device().create_buffer(&buffer_descriptor);
-        InstanceBuffer { buffer, len: 0 }
+        InstanceBuffer { buffer }
     }
 
-    pub(crate) fn write_blits<'a>(
-        &mut self,
-        gpu: &Gpu,
-        instances: impl Iterator<Item = &'a BlitCommand>,
-    ) {
-        let instance_data: Vec<_> = instances.map(Instance::from_blit).collect();
-        gpu.queue()
-            .write_buffer(&self.buffer, 0, bytemuck::cast_slice(&instance_data));
-        self.len = instance_data.len() as u64;
+    pub(crate) fn write_instances(&self, gpu: &Gpu, instances: &[Instance]) {
+        gpu
+            .queue()
+            .write_buffer(&self.buffer, 0, bytemuck::cast_slice(instances));
     }
 
     pub(crate) fn buffer(&self) -> &wgpu::Buffer {
         &self.buffer
-    }
-
-    pub(crate) fn len(&self) -> u64 {
-        self.len
     }
 
     pub(crate) fn layout() -> wgpu::VertexBufferLayout<'static> {
@@ -53,7 +44,7 @@ impl InstanceBuffer {
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
-struct Instance {
+pub(crate) struct Instance {
     model: [[f32; 4]; 4],
     color: [f32; 4],
 }
@@ -61,7 +52,7 @@ struct Instance {
 impl Instance {
     const ATTR_ARRAY: [VertexAttribute; 5] = wgpu::vertex_attr_array![10 => Float32x4, 11 => Float32x4, 12 => Float32x4, 13 => Float32x4, 14 => Float32x4];
 
-    fn from_blit(blit: &BlitCommand) -> Instance {
+    pub(crate) fn from_blit(blit: &BlitCommand) -> Instance {
         let translation_matrix =
             Matrix4::from_translation((blit.position.x as f32, blit.position.y as f32, 0.0).into());
         let scale_matrix =

@@ -1,8 +1,9 @@
 use cgmath::{Matrix4, Vector2};
 use wgpu::{util::DeviceExt, BindGroupLayout};
 
-use super::device::Gpu;
 use lazy_static::lazy_static;
+
+use crate::renderer::render_thread::gpu::Gpu;
 
 lazy_static! {
     static ref BOTTOM_LEFT_ZERO_MATRIX: Matrix4<f32> =

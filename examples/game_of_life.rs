@@ -1,24 +1,31 @@
 use cgmath::Vector2;
-use floppa2::renderer::{Renderer, Color};
+use floppa2::renderer::sprite::Sprite;
+use floppa2::renderer::{Color, Renderer};
+use floppa2::renderer_ext::RendererExt;
 use rand::Rng;
 use winit::{
-    event::{Event, WindowEvent, KeyboardInput, ElementState, VirtualKeyCode, MouseButton},
+    dpi::PhysicalSize,
+    event::{ElementState, Event, KeyboardInput, MouseButton, VirtualKeyCode, WindowEvent},
     event_loop::{ControlFlow, EventLoop},
-    window::{WindowBuilder}, dpi::PhysicalSize,
+    window::Window,
+    window::WindowBuilder,
 };
 
-const WINDOW_SIZE: u32 = 1200;
+const WINDOW_SIZE: u32 = 800;
 const CELL_SIZE: u32 = 20;
 const CELL_COUNT: u32 = WINDOW_SIZE / CELL_SIZE; // 40
 
 struct World {
     size: Vector2<usize>,
-    data: Vec<bool>
+    data: Vec<bool>,
 }
 
 impl World {
     fn empty(size: Vector2<usize>) -> World {
-        World {size: size, data: vec![false; size.x * size.y]}
+        World {
+            size: size,
+            data: vec![false; size.x * size.y],
+        }
     }
 
     fn filled_at(size: Vector2<usize>, ratio: f32) -> World {
@@ -40,7 +47,7 @@ impl World {
     }
 
     fn at(&self, x: isize, y: isize) -> Option<bool> {
-        if x >= 0 && y >= 0 &&  x < self.size.x as isize && y < self.size.y as isize {
+        if x >= 0 && y >= 0 && x < self.size.x as isize && y < self.size.y as isize {
             Some(self.data[self.to_position(x as usize, y as usize)])
         } else {
             None
@@ -64,28 +71,35 @@ impl World {
                 let mut alive_neighbours = 0;
                 for xx in -1..=1 {
                     for yy in -1..=1 {
-                        if !(xx == 0 && yy == 0) && self.at_or_false(x as isize + xx, y as isize + yy) {
+                        if !(xx == 0 && yy == 0)
+                            && self.at_or_false(x as isize + xx, y as isize + yy)
+                        {
                             alive_neighbours += 1;
                         }
                     }
                 }
-                new_world.data[position] = alive_neighbours == 3 || (alive_neighbours == 2 && self.at_or_false(x as isize, y as isize));
+                new_world.data[position] = alive_neighbours == 3
+                    || (alive_neighbours == 2 && self.at_or_false(x as isize, y as isize));
             }
-        };
+        }
         new_world
     }
 }
 
 struct Game {
     world: World,
-    highlighted: Option<Vector2<u32>>
+    highlighted: Option<Vector2<u32>>,
+    tile_sprite: Sprite,
+    tile_frame: Sprite,
 }
 
 impl Game {
-    fn new() -> Game {
+    fn new(renderer: &Renderer) -> Game {
         Game {
             world: World::filled_at((CELL_COUNT as usize, CELL_COUNT as usize).into(), 0.5),
-            highlighted: None
+            highlighted: None,
+            tile_sprite: renderer.create_sprite_from_file("examples/tile.png"),
+            tile_frame: renderer.create_sprite_from_file("examples/tile_frame.png"),
         }
     }
 
@@ -94,43 +108,61 @@ impl Game {
     }
 
     fn render(&self, renderer: &Renderer) {
-        let cell_size: Vector2<u32> = (CELL_SIZE, CELL_SIZE).into();
         renderer.render(|ctx| {
+            ctx.set_clear_color(Color::BLUE);
             for x in 0..CELL_COUNT {
                 for y in 0..CELL_COUNT {
-                    let cell_position = Vector2 { x: x * CELL_SIZE , y: y * CELL_SIZE };
+                    let cell_position = Vector2 {
+                        x: x * CELL_SIZE,
+                        y: y * CELL_SIZE,
+                    };
                     let cell_state = self.world.at_or_false(x as isize, y as isize);
                     let cell_color = match (cell_state, Some((x, y).into()) == self.highlighted) {
-                        (true, true) => Color {r: 1.0, g: 0.0, b: 0.0, a: 0.0},
-                        (false, true) => Color {r: 0.2, g: 0.0, b: 0.0, a: 0.0},
+                        (_, true) => Color::RED,
                         (true, false) => Color::WHITE,
-                        (false, false) => Color::BLACK
+                        (false, false) => Color::BLACK,
                     };
-                    ctx.draw_rectangle(cell_size).at(cell_position).with_color(cell_color);
+                    let cell_sprite = match (cell_state, Some((x, y).into()) == self.highlighted) {
+                        (false, true) => &self.tile_frame,
+                        _ => &self.tile_sprite,
+                    };
+                    ctx.draw(&cell_sprite)
+                        .at(cell_position)
+                        .with_color(cell_color);
                 }
             }
         });
     }
 
     fn on_mouse_move(&mut self, position: Vector2<f32>) {
-        self.highlighted = Some((position.x as u32 / CELL_SIZE, position.y as u32 / CELL_SIZE).into())
+        self.highlighted =
+            Some((position.x as u32 / CELL_SIZE, position.y as u32 / CELL_SIZE).into())
     }
 
     fn on_mouse_left_button(&mut self) {
-        if let Some(Vector2 {x, y}) = self.highlighted {
+        if let Some(Vector2 { x, y }) = self.highlighted {
             self.world.toggle(x as usize, y as usize);
         }
     }
 }
 
-
 fn main() {
     let event_loop = EventLoop::new();
-    let window = WindowBuilder::new().with_inner_size(PhysicalSize{width: WINDOW_SIZE, height: WINDOW_SIZE}).build(&event_loop).unwrap();
-    let window_size = Vector2{x: window.inner_size().width, y: window.inner_size().height};
-    let renderer =  Renderer::compatible_with(&window, window_size.into());
+    let window = WindowBuilder::new()
+        .with_inner_size(PhysicalSize {
+            width: WINDOW_SIZE,
+            height: WINDOW_SIZE,
+        })
+        .with_title("Game of Life")
+        .build(&event_loop)
+        .unwrap();
+    let window_size = Vector2 {
+        x: window.inner_size().width,
+        y: window.inner_size().height,
+    };
+    let renderer = Renderer::compatible_with::<Window>(&window, window_size.into());
 
-    let mut game = Game::new();
+    let mut game = Game::new(&renderer);
 
     event_loop.run(move |event, _, cf| match event {
         Event::WindowEvent {
@@ -138,25 +170,35 @@ fn main() {
             event: win_event,
         } if window_id == window.id() => match win_event {
             WindowEvent::CloseRequested => *cf = ControlFlow::Exit,
-            WindowEvent::KeyboardInput { input: KeyboardInput {
-                virtual_keycode: Some(key),
-                state: ElementState::Released,
+            WindowEvent::KeyboardInput {
+                input:
+                    KeyboardInput {
+                        virtual_keycode: Some(key),
+                        state: ElementState::Released,
+                        ..
+                    },
                 ..
-            }, .. } => match key {
+            } => match key {
                 VirtualKeyCode::N => {
                     game.step();
                     window.request_redraw()
-                },
-                _ => ()
+                }
+                _ => (),
             },
             WindowEvent::CursorMoved { position, .. } => {
-                game.on_mouse_move((position.x as f32, WINDOW_SIZE as f32 - position.y as f32).into());
+                game.on_mouse_move(
+                    (position.x as f32, WINDOW_SIZE as f32 - position.y as f32).into(),
+                );
                 window.request_redraw();
-            },
-            WindowEvent::MouseInput { button: MouseButton::Left, state: ElementState::Released, ..} => {
+            }
+            WindowEvent::MouseInput {
+                button: MouseButton::Left,
+                state: ElementState::Released,
+                ..
+            } => {
                 game.on_mouse_left_button();
                 window.request_redraw();
-            },
+            }
             WindowEvent::Resized(new_size) => {
                 renderer.resize((new_size.width, new_size.height).into());
                 window.request_redraw();

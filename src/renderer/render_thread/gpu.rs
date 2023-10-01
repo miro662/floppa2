@@ -1,6 +1,6 @@
 use cgmath::Vector2;
-use raw_window_handle::HasRawDisplayHandle;
-use raw_window_handle::HasRawWindowHandle;
+
+use crate::renderer::CompatibleWindow;
 
 pub(crate) struct Gpu {
     device: wgpu::Device,
@@ -11,10 +11,10 @@ pub(crate) struct Gpu {
 }
 
 impl Gpu {
-    pub(crate) fn compatible_with<T>(window: T, size: impl Into<Vector2<u32>>) -> Gpu
-    where
-        T: HasRawWindowHandle + HasRawDisplayHandle,
-    {
+    pub(crate) fn compatible_with(
+        window: impl CompatibleWindow,
+        size: impl Into<Vector2<u32>>,
+    ) -> Gpu {
         let instance = wgpu::Instance::default();
         let surface = unsafe { instance.create_surface(&window) }.unwrap();
         let adapter = pollster::block_on(Self::get_adapter(&instance, &surface));
